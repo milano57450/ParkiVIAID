@@ -1,0 +1,102 @@
+from django.shortcuts import render
+from rest_framework import viewsets
+from rest_framework.decorators import action, api_view
+from rest_framework.response import Response
+from .models import Place, Badge, EvenementAcces
+from .serializers import PlaceSerializer, BadgeSerializer, EvenementAccesSerializer
+# ── ViewSets ──────────────────────────────────────────────────
+class PlaceViewSet(viewsets.ModelViewSet):
+    queryset = Place.objects.all()
+    serializer_class = PlaceSerializer
+class BadgeViewSet(viewsets.ModelViewSet):
+    queryset = Badge.objects.all()
+    serializer_class = BadgeSerializer
+    @action(detail=False, methods=['post'])
+    def verifier(self, request):
+        uid = request.data.get('uid')
+        if not uid:
+            return Response({'erreur': 'UID manquant'}, status=400)
+        try:
+            badge = Badge.objects.get(uid=uid, actif=True)
+            return Response({'autorise': True})
+        except Badge.DoesNotExist:
+            return Response({'autorise': False}, status=403)
+class EvenementAccesViewSet(viewsets.ModelViewSet):
+    queryset = EvenementAcces.objects.all()
+    serializer_class = EvenementAccesSerializer
+# ── Endpoints entrée / sortie ─────────────────────────────────
+@api_view(['POST'])
+def entree(request):
+    uid = request.data.get('uid')
+    try:
+        badge = Badge.objects.get(uid=uid, actif=True)
+    except Badge.DoesNotExist:
+        return Response({"message": "Badge invalide"}, status=403)
+    place = Place.objects.filter(occupee=False).first()
+    if not place:
+        return Response({"message": "Parking complet"}, status=400)
+    place.occupee = True
+    place.badge = badge
+    place.save()
+    EvenementAcces.objects.create(badge=badge, type_evenement='ENTREE')
+    return Response({
+        "message": f"Voiture entrée - Place {place.numero}",
+        "badge": badge.uid
+    })
+@api_view(['POST'])
+def sortie(request):
+    uid = request.data.get('uid')
+    try:
+        badge = Badge.objects.get(uid=uid)
+    except Badge.DoesNotExist:
+        return Response({"message": "Badge introuvable"}, status=404)
+    place = Place.objects.filter(occupee=True, badge=badge).first()
+    if not place:
+        return Response({"message": "Aucune place associée"}, status=400)
+    place.occupee = False
+    place.badge = None
+    place.save()
+    EvenementAcces.objects.create(badge=badge, type_evenement='SORTIE')
+    return Response({
+        "message": f"Voiture sortie - Place {place.numero}",
+        "badge": badge.uid
+    })
+# ── Vues HTML ─────────────────────────────────────────────────
+def accueil(request):
+    total = Place.objects.count()
+    libres = Place.objects.filter(occupee=False).count()
+    return render(request, 'index.html', {
+        'total': total,
+        'libres': libres,
+        'occupees': total - libres
+    })
+def dashboard(request):
+    total = Place.objects.count()
+    libres = Place.objects.filter(occupee=False).count()
+    occupees = Place.objects.filter(occupee=True).count()
+    return render(request, "dashboard.html", {
+        "total": total,
+        "libres": libres,
+        "occupees": occupees
+    })
+# ── Endpoints API stats ───────────────────────────────────────
+@api_view(['GET'])
+def statistiques(request):
+    total = Place.objects.count()
+    libres = Place.objects.filter(occupee=False).count()
+    occupees = Place.objects.filter(occupee=True).count()
+    return Response({
+        'total': total,
+        'libres': libres,
+        'occupees': occupees,
+        'taux_occupation': round((occupees / total * 100), 1) if total > 0 else 0
+    })
+@api_view(['GET'])
+def status_parking(request):
+    total = Place.objects.count()
+    libres = Place.objects.filter(occupee=False).count()
+    return Response({
+        "places_totales": total,
+        "places_libres": libres,
+        "places_occupees": total - libres
+    })
